@@ -1,3 +1,3 @@
 # ml-study
 
-### Week 1: Tutorial
+### Week 1: Tutorial!

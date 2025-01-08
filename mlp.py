@@ -1,7 +1,10 @@
+import argparse
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import wandb
 
 import torch
 from torch import nn, optim
@@ -10,9 +13,7 @@ import torch.nn.functional as F                       # torch 내의 세부적�
 
 from sklearn.metrics import mean_squared_error        # regression 문제의 모델 성능 측정을 위해서 MSE를 불러온다.
 
-df = pd.read_csv("/Users/eunhyokim/Desktop/SILAB/ml-study/df.csv")
-X = df.drop('score', axis = 1).to_numpy()
-y = df['score'].to_numpy().reshape((-1,1))
+# export PATH=~/opt/anaconda3/envs/silab/bin:$PATH
 
 class TensorData(Dataset):
 
@@ -29,21 +30,14 @@ class TensorData(Dataset):
         return self.len
     
 from sklearn.model_selection import train_test_split
-X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.7, random_state=42, shuffle=True)
 
-# 학습 데이터, 시험 데이터 배치 형태로 구축하기
-trainsets = TensorData(X_train, Y_train)
-trainloader = torch.utils.data.DataLoader(trainsets, batch_size=40, shuffle=True)
-
-testsets = TensorData(X_test, Y_test)
-testloader = torch.utils.data.DataLoader(testsets, batch_size=40, shuffle=False)
 
 class Regressor(nn.Module):
-    def __init__(self):
+    def __init__(self, node_num):
         super().__init__() # 모델 연산 정의
-        self.fc1 = nn.Linear(5, 15, bias=True) # 입력층(5) -> 은닉층1(15)으로 가는 연산
-        self.fc2 = nn.Linear(15, 10, bias=True) # 은닉층1(15) -> 은닉층2(10)으로 가는 연산
-        self.fc3 = nn.Linear(10, 1, bias=True) # 은닉층2(10) -> 출력층(1)으로 가는 연산
+        self.fc1 = nn.Linear(5, node_num, bias=True) # 입력층(5) -> 은닉층1(15)으로 가는 연산
+        self.fc2 = nn.Linear(node_num, node_num, bias=True) # 은닉층1(15) -> 은닉층2(10)으로 가는 연산
+        self.fc3 = nn.Linear(node_num, 1, bias=True) # 은닉층2(10) -> 출력층(1)으로 가는 연산
         self.dropout = nn.Dropout(0.2) # 연산이 될 때마다 20%의 비율로 랜덤하게 노드를 없앤다.
 
     def forward(self, x): # 모델 연산의 순서를 정의
@@ -53,10 +47,6 @@ class Regressor(nn.Module):
       
         return x
 
-model = Regressor()
-criterion = nn.MSELoss()
-
-optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-7)
 
 def evaluation(dataloader):
 
@@ -141,34 +131,74 @@ class EarlyStopping:
             # Continue
             self.early_stop = False
 
-loss_ = [] 
-n = len(trainloader)
-val_loss = []
-es = EarlyStopping(model)
 
-for epoch in range(1000):
 
-  running_loss = 0.0 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--node_num", type=int, default="15")
+    parser.add_argument("--seed", type=int, default=0)
 
-  for i, data in enumerate(trainloader, 0): 
-    model.train()
-    inputs, values = data # data에는 X, Y가 들어있다.
+    args = parser.parse_args()
 
-    optimizer.zero_grad() # 최적화 초기화.
+    seed = args.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
-    outputs = model(inputs) # 모델에 입력값을 넣어 예측값을 산출한다.
-    loss = criterion(outputs, values) # 손실함수를 계산. error 계산.
-    loss.backward() # 손실 함수를 기준으로 역전파를 설정한다.
-    optimizer.step() # 역전파를 진행하고 가중치를 업데이트한다.
+    wandb.init(project="mlp", config=vars(args))
 
-    running_loss += loss.item() # epoch 마다 평균 loss를 계산하기 위해 배치 loss를 더한다.
-  
-  loss_.append(running_loss/n) # MSE(Mean Squared Error) 계산
-  test_mse = evaluation(testloader)
-  val_loss.append(test_mse)
+    df = pd.read_csv("/Users/eunhyokim/Desktop/SILAB/ml-study/df.csv")
+    X = df.drop('score', axis = 1).to_numpy()
+    y = df['score'].to_numpy().reshape((-1,1))
 
-  es(test_mse)
-  if es.early_stop:
-    print(epoch)
-    break
+    X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.7, random_state=42, shuffle=True)
+
+    # 학습 데이터, 시험 데이터 배치 형태로 구축하기
+    trainsets = TensorData(X_train, Y_train)
+    trainloader = torch.utils.data.DataLoader(trainsets, batch_size=40, shuffle=True)
+
+    testsets = TensorData(X_test, Y_test)
+    testloader = torch.utils.data.DataLoader(testsets, batch_size=40, shuffle=False)
+
+    model = Regressor(args.node_num)
+    criterion = nn.MSELoss()
+
+    optimizer = optim.Adam(model.parameters(), lr=0.005, weight_decay=1e-7)
+
+    loss_ = [] 
+    n = len(trainloader)
+    val_loss = []
+    es = EarlyStopping(model)
+
+    for epoch in range(1000):
+
+        running_loss = 0.0 
+
+        for i, data in enumerate(trainloader, 0): 
+            model.train()
+            inputs, values = data # data에는 X, Y가 들어있다.
+
+            optimizer.zero_grad() # 최적화 초기화.
+
+            outputs = model(inputs) # 모델에 입력값을 넣어 예측값을 산출한다.
+            loss = criterion(outputs, values) # 손실함수를 계산. error 계산.
+            loss.backward() # 손실 함수를 기준으로 역전파를 설정한다.
+            optimizer.step() # 역전파를 진행하고 가중치를 업데이트한다.
+
+            running_loss += loss.item() # epoch 마다 평균 loss를 계산하기 위해 배치 loss를 더한다.
+        
+        loss_.append(running_loss/n) # MSE(Mean Squared Error) 계산
+        test_mse = evaluation(testloader)
+        val_loss.append(test_mse)
+
+        wandb.log({"train_loss": running_loss/n, "test_loss": test_mse})
+
+        es(test_mse)
+        if es.early_stop:
+            print(epoch)
+            break
+
+
+
+
 
